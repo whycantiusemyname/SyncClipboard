@@ -14,17 +14,59 @@ public class BasicAuthenticationHandler(
     ICredentialChecker checker
         ) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
+    internal static bool TryParseCredentials(string? authorizationHeader, out string username, out string password)
+    {
+        username = string.Empty;
+        password = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(authorizationHeader))
+        {
+            return false;
+        }
+
+        var separator = authorizationHeader.IndexOfAny([' ', '\t']);
+        if (separator < 0 || !authorizationHeader[..separator].Equals("Basic", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var token = authorizationHeader[separator..].Trim();
+        if (token.Length == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            var credentialString = new UTF8Encoding(false, true).GetString(Convert.FromBase64String(token));
+            var colon = credentialString.IndexOf(':');
+            if (colon < 0)
+            {
+                return false;
+            }
+
+            username = credentialString[..colon];
+            password = credentialString[(colon + 1)..];
+            return true;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
+    }
+
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         var authHeader = Request.Headers.Authorization.ToString();
-        if (authHeader?.StartsWith("basic", StringComparison.OrdinalIgnoreCase) == true)
+        if (TryParseCredentials(authHeader, out var username, out var password))
         {
-            var token = authHeader["Basic ".Length..].Trim();
-            var credentialstring = Encoding.UTF8.GetString(Convert.FromBase64String(token));
-            var credentials = credentialstring.Split(':');
-            if (checker.Check(credentials[0], credentials[1]))
+            if (checker.Check(username, password))
             {
-                var claims = new[] { new Claim("name", credentials[0]), new Claim(ClaimTypes.Role, "Admin") };
+                var claims = new[] { new Claim("name", username), new Claim(ClaimTypes.Role, "Admin") };
                 var identity = new ClaimsIdentity(claims, "Basic");
                 var claimsPrincipal = new ClaimsPrincipal(identity);
                 return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(claimsPrincipal, Scheme.Name)));
